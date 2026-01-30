@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Soil Moisture Dashboard MVP - PostgreSQL</title>
+<!--
+CSS-стили имитируют Tailwind CSS.
+-->
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<!-- Подключение Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+<style>
+/* =======================================================
+ОСНОВНЫЕ СТИЛИ
+======================================================= */
+body {
+font-family: 'Inter', sans-serif;
+background-color: #f7fafc;
+padding: 2rem;
+min-height: 100vh;
+margin: 0;
+}
+header { margin-bottom: 1.5rem; }
+h1 {
+font-size: 1.875rem;
+font-weight: 700;
+color: #1f2937;
+}
+.text-gray-500 { color: #6b7280; }
+.grid {
+display: grid;
+gap: 1.5rem;
+grid-template-columns: 1fr;
+}
+@media (min-width: 1024px) {
+.grid { grid-template-columns: repeat(3, 1fr); }
+.lg\:col-span-2 { grid-column: span 2 / span 2; }
+.lg\:col-span-1 { grid-column: span 1 / span 1; }
+}
+/* Стили для контейнера карты - ВАЖНО иметь четкую высоту */
+#map {
+height: 80vh;
+min-height: 500px;
+border-radius: 0.75rem;
+box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+z-index: 1;
+background: #cbd5e1; /* Серый фон, пока карта грузится */
+}
+/* Стили для боковой панели */
+.sidebar {
+background-color: white;
+padding: 1.5rem;
+border-radius: 0.75rem;
+box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+position: relative;
+}
+.sidebar h2 {
+font-size: 1.25rem;
+font-weight: 600;
+color: #374151;
+margin-bottom: 1rem;
+border-bottom: 1px solid #e5e7eb;
+padding-bottom: 0.5rem;
+}
+/* Контейнер для 3D */
+#threeD-container {
+width: 100%;
+height: 400px;
+border-radius: 0.5rem;
+margin-bottom: 1.5rem;
+background-color: #f1f5f9;
+border: 1px solid #e2e8f0;
+position: relative;
+overflow: hidden;
+}
+#threeD-container canvas {
+display: block;
+width: 100%;
+height: 100%;
+}
+
+/* Стиль для инфо-панели 3D (Popup) */
+#threeD-info {
+position: absolute;
+top: 10px;
+left: 10px;
+background: rgba(15, 23, 42, 0.9);
+color: white;
+padding: 8px 12px;
+border-radius: 6px;
+pointer-events: none;
+opacity: 0;
+transition: opacity 0.2s;
+z-index: 100;
+font-size: 12px;
+}
+/* Индикатор выбранного здания */
+#building-status {
+font-weight: 600;
+padding: 0.5rem;
+border-radius: 0.375rem;
+margin-bottom: 1rem;
+text-align: center;
+background-color: #fffbeb;
+color: #b45309;
+border: 1px solid #fcd34d;
+}
+
+.control-group {
+padding: 0.75rem;
+border-radius: 0.5rem;
+margin-bottom: 1rem;
+}
+.bg-blue-50 { background-color: #eff6ff; }
+.text-blue-800 { color: #1e40af; }
+.bg-green-50 { background-color: #ecfdf5; }
+.text-green-800 { color: #065f46; }
+
+/* Стиль для элементов управления */
+input[type="date"], input[type="range"] {
+width: 100%;
+margin-top: 0.25rem;
+padding: 0.5rem;
+border: 1px solid #bfdbfe;
+border-radius: 0.375rem;
+}
+/* Стиль для маркеров зданий */
+.custom-building-icon div {
+z-index: 1000;
+background-color: #1e293b;
+color: white;
+border-radius: 5px;
+padding: 5px 8px;
+font-weight: bold;
+font-size: 12px;
+box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+cursor: pointer;
+border: 2px solid #ffffff;
+white-space: nowrap;
+}
+.custom-building-icon-selected div {
+background-color: #2563eb;
+border: 2px solid #fbbf24 !important;
+}
+</style>
+</head>
+<body class="p-4 md:p-8">
+
+<header class="mb-6">
+<h1 class="text-3xl font-bold text-gray-800">Soil-Moisture Monitoring Dashboard</h1>
+<p class="text-gray-500">Визуализация данных из PostgreSQL в реальном времени (Астана).</p>
+</header>
+
+<div class="grid">
+
+<!-- Основной блок - Карта -->
+<div class="lg:col-span-2">
+<div id="map"></div>
+</div>
+
+<!-- Боковая панель - Управление и 3D-визуализация -->
+<div class="lg:col-span-1 sidebar">
+<h2>3D Разрез шахт</h2>
+<div id="building-status">
+Выбрано здание: H-001
+</div>
+
+<!-- Контейнер для 3D-визуализации -->
+<div id="threeD-container">
+<!-- Панель для отображения данных при наведении в 3D -->
+<div id="threeD-info"></div>
+</div>
+
+<!-- Элементы управления -->
+<div id="controls-placeholder" class="space-y-4">
+<div class="control-group bg-blue-50">
+<p class="font-medium text-blue-800 text-sm">Календарь выбора даты</p>
+<input type="date" id="date-picker" value="2025-11-27"
+class="w-full mt-1 p-2 border border-blue-200 rounded-md"
+onchange="refreshDashboard()">
+</div>
+<div class="control-group bg-green-50">
+<p class="font-medium text-green-800 text-sm">Ползунок часа</p>
+<input type="range" min="8" max="17" value="8" id="hour-slider"
+class="w-full mt-2"
+oninput="document.getElementById('hourValue').innerText=this.value.padStart(2, '0') + ':00'; refreshDashboard()">
+<span id="hourValue" class="text-sm font-mono text-green-700 block text-right font-bold mt-1">08:00</span>
+</div>
+</div>
+</div>
+</div>
+
+<!-- Библиотеки -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+<script>
+// =======================================================
+// I. ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И НАСТРОЙКИ
+// =======================================================
+let map;
+const API_URL = '/api/sensors';
+let allSensors = [];
+let selectedBuildingId = 'H-001';
+
+// THREE.JS VARIABLES
+let scene, camera, renderer, controls, raycaster;
+let INTERSECTED;
+const NUM_LEVELS = 10;
+const LEVEL_HEIGHT = 6;
+const LEVEL_SIZE = 100;
+const GRID_SEGMENTS = 20;
+
+// Маппинг труб (pipe_id) в 3D координаты углов
+const PIPE_COORDS = { 'S1': [0,0], 'S2': [100,0], 'S3': [100,100], 'S4': [0,100] };
+
+// =======================================================
+// II. LEAFLET (КАРТА) ЛОГИКА
+// =======================================================
+function initializeMap() {
+console.log("Инициализация карты...");
+// Центр Астаны
+map = L.map('map').setView([51.169, 71.449], 16);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+attribution: '© OpenStreetMap contributors'
+}).addTo(map);
+
+// Принудительное обновление размера, если карта была скрыта
+setTimeout(() => { map.invalidateSize(); }, 200);
+}
+
+function getSensorColor(m) {
+if (m > 40) return '#ef4444';
+if (m > 30) return '#f97316';
+if (m > 20) return '#3b82f6';
+return '#10b981';
+}
+
+function renderSensorsOnMap(sensors) {
+if (!map) return;
+map.eachLayer(layer => { if (layer.options && layer.options.isSensor) map.removeLayer(layer); });
+
+sensors.forEach(sensor => {
+if (sensor.building_id !== selectedBuildingId) return;
+
+if (sensor.sensor_lat && sensor.sensor_long) {
+L.circleMarker([parseFloat(sensor.sensor_lat), parseFloat(sensor.sensor_long)], {
+radius: 7,
+fillColor: getSensorColor(sensor.moisture_value),
+color: sensor.is_epicenter ? '#000' : '#fff',
+weight: sensor.is_epicenter ? 3 : 1,
+fillOpacity: 0.8,
+isSensor: true
+}).addTo(map)
+.bindPopup(`Датчик: ${sensor.sensor_id}<br>Влажность: ${sensor.moisture_value}%`);
+}
+});
+}
+function renderBuildingsOnMap(sensors) {
+if (!map) return;
+map.eachLayer(layer => { if (layer.options && layer.options.isBuilding) map.removeLayer(layer); });
+
+const buildings = {};
+sensors.forEach(s => {
+if (!buildings[s.building_id]) {
+buildings[s.building_id] = {
+id: s.building_id,
+lat: s.building_lat,
+lng: s.building_long,
+};
+}
+});
+
+if (Object.keys(buildings).length === 0) {
+console.warn("Здания не найдены в полученных данных.");
+return;
+}
+
+Object.values(buildings).forEach(b => {
+const isSelected = b.id === selectedBuildingId;
+const icon = L.divIcon({
+className: `custom-building-icon ${isSelected ? 'custom-building-icon-selected' : ''}`,
+html: `<div>${b.id}</div>`,
+iconSize: [60, 24]
+});
+
+L.marker([parseFloat(b.lat), parseFloat(b.lng)], { icon, isBuilding: true })
+.addTo(map)
+.on('click', () => selectBuilding(b.id));
+});
+}
+function selectBuilding(id) {
+selectedBuildingId = id;
+document.getElementById('building-status').innerText = `Выбрано здание: ${id}`;
+refreshDashboard();
+}
+
+// =======================================================
+// III. THREE.JS (3D) ЛОГИКА
+// =======================================================
+function simplifiedInterpolation(x, z, sensorsOnLevel) {
+if (sensorsOnLevel.length < 2) return 50;
+let sumWeightMoisture = 0, sumWeight = 0;
+const power = 2;
+
+sensorsOnLevel.forEach(s => {
+const [sx, sz] = PIPE_COORDS[s.pipe_id] || [50, 50];
+const d2 = Math.pow(x - sx, 2) + Math.pow(z - sz, 2);
+if (d2 < 0.1) { sumWeightMoisture = s.moisture_value; sumWeight = 1; return; }
+const w = 1 / Math.pow(Math.sqrt(d2), power);
+sumWeightMoisture += w * s.moisture_value;
+sumWeight += w;
+});
+
+return sumWeight > 0 ? Math.min(100, Math.max(0, sumWeightMoisture / sumWeight)) : 50;
+}
+
+function createMoistureWave(levelIndex, sensorsForLevel) {
+const geometry = new THREE.PlaneGeometry(LEVEL_SIZE, LEVEL_SIZE, GRID_SEGMENTS, GRID_SEGMENTS);
+const yPos = -(levelIndex) * LEVEL_HEIGHT;
+const colorArr = new Float32Array(geometry.attributes.position.count * 3);
+
+for (let i = 0; i < geometry.attributes.position.count; i++) {
+const vertex = new THREE.Vector3().fromBufferAttribute(geometry.attributes.position, i);
+const xWorld = vertex.x + 50;
+const zWorld = vertex.y + 50;
+const m = sensorsForLevel.length > 0 ? simplifiedInterpolation(xWorld, zWorld, sensorsForLevel) : 20;
+const ratio = m / 100;
+const c = new THREE.Color().setHSL(0.33 * (1 - ratio), 1.0, 0.5);
+
+colorArr[i * 3] = c.r;
+colorArr[i * 3 + 1] = c.g;
+colorArr[i * 3 + 2] = c.b;
+geometry.attributes.position.setZ(i, vertex.z + (ratio * 2));
+}
+geometry.setAttribute('color', new THREE.BufferAttribute(colorArr, 3));
+geometry.attributes.position.needsUpdate = true;
+
+const wave = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+vertexColors: true, transparent: true, opacity: 0.5, side: THREE.DoubleSide
+}));
+wave.rotation.x = -Math.PI / 2;
+wave.position.set(50, yPos + 0.1, 50);
+wave.userData.isWave = true;
+scene.add(wave);
+}
+
+function renderSensorsIn3D(sensors) {
+scene.children.filter(obj => obj.userData.isSensor || obj.userData.isWave || obj.userData.isLevel).forEach(obj => scene.remove(obj));
+
+for (let i = 0; i < NUM_LEVELS; i++) {
+const grid = new THREE.Mesh(
+new THREE.PlaneGeometry(LEVEL_SIZE, LEVEL_SIZE),
+new THREE.MeshBasicMaterial({ color: 0xcbd5e1, wireframe: true, transparent: true, opacity: 0.15 })
+);
+grid.rotation.x = -Math.PI / 2;
+grid.position.set(50, -i * LEVEL_HEIGHT, 50);
+grid.userData.isLevel = true;
+scene.add(grid);
+}
+
+const levels = {};
+sensors.forEach(s => {
+levels[s.sensor_depth] = levels[s.sensor_depth] || [];
+levels[s.sensor_depth].push(s);
+
+const mat = new THREE.MeshLambertMaterial({ color: getSensorColor(s.moisture_value) });
+const mesh = new THREE.Mesh(new THREE.SphereGeometry(2.5, 16, 16), mat);
+const [x, z] = PIPE_COORDS[s.pipe_id] || [50, 50];
+mesh.position.set(x, -(s.sensor_depth - 1) * LEVEL_HEIGHT, z);
+if (s.is_epicenter) mesh.scale.set(1.5, 1.5, 1.5);
+
+mesh.userData = {
+isSensor: true,
+id: s.sensor_id,
+moisture: s.moisture_value,
+depth: s.sensor_depth,
+originalColor: mat.color.getHex(),
+isEpicenter: s.is_epicenter
+};
+scene.add(mesh);
+});
+
+for (let i = 0; i < NUM_LEVELS; i++) {
+createMoistureWave(i, levels[i+1] || []);
+}
+}
+function initialize3D() {
+const container = document.getElementById('threeD-container');
+scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf1f5f9);
+
+camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+camera.position.set(130, 90, 130);
+renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(container.clientWidth, container.clientHeight);
+container.appendChild(renderer.domElement);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const light = new THREE.DirectionalLight(0xffffff, 1);
+light.position.set(100, 100, 100);
+scene.add(light);
+
+controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set(50, -30, 50);
+controls.update();
+
+raycaster = new THREE.Raycaster();
+container.addEventListener('mousemove', onMouseMove);
+animate();
+}
+
+function onMouseMove(event) {
+const container = document.getElementById('threeD-container');
+const rect = container.getBoundingClientRect();
+const mouse = new THREE.Vector2(
+((event.clientX - rect.left) / container.clientWidth) * 2 - 1,
+-((event.clientY - rect.top) / container.clientHeight) * 2 + 1
+);
+
+raycaster.setFromCamera(mouse, camera);
+const intersects = raycaster.intersectObjects(scene.children.filter(o => o.userData.isSensor));
+const info = document.getElementById('threeD-info');
+
+if (intersects.length > 0) {
+const obj = intersects[0].object;
+if (INTERSECTED != obj) {
+if (INTERSECTED) INTERSECTED.material.emissive.setHex(0x000000);
+INTERSECTED = obj;
+INTERSECTED.material.emissive.setHex(0x333333);
+info.innerHTML = `<strong>ID: ${obj.userData.id}</strong><br>Влажность: ${obj.userData.moisture}%<br>Глубина: ${obj.userData.depth}`;
+info.style.opacity = 1;
+}
+} else {
+if (INTERSECTED) INTERSECTED.material.emissive.setHex(0x000000);
+INTERSECTED = null;
+info.style.opacity = 0;
+}
+}
+function animate() {
+requestAnimationFrame(animate);
+if (controls) controls.update();
+if (renderer) renderer.render(scene, camera);
+}
+
+// =======================================================
+// IV. ЛОГИКА ДАННЫХ
+// =======================================================
+async function refreshDashboard() {
+const date = document.getElementById('date-picker').value;
+const hour = document.getElementById('hour-slider').value;
+console.log(`Запрос данных: Дата=${date}, Час=${hour}`);
+try {
+const response = await fetch(`${API_URL}?date=${date}&hour=${hour}`);
+if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+const data = await response.json();
+console.log(`Получено записей: ${data.length}`);
+allSensors = data;
+renderBuildingsOnMap(data);
+renderSensorsOnMap(data);
+const buildingData = data.filter(s => s.building_id === selectedBuildingId);
+renderSensorsIn3D(buildingData);
+} catch (error) {
+console.error("Ошибка при обновлении данных:", error);
+}
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+initializeMap();
+initialize3D();
+refreshDashboard();
+});
+</script>
+</body>
+</html>
