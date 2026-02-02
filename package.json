@@ -1,21 +1,16 @@
 {
-  "name": "soil-moisture-dashboard",
+  "name": "soil-monitoring-system",
   "version": "1.0.0",
-  "description": "API server for sensor data visualization.",
+  "description": "Система 3D-мониторинга влажности грунта на базе Node.js и PostgreSQL",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "import": "node import_csv_to_db.js"
   },
-  "keywords": [
-    "node",
-    "express",
-    "leaflet",
-    "3d"
-  ],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "cors": "^2.8.5",
-    "express": "^4.18.2"
+    "csv-parser": "^3.0.0",
+    "dotenv": "^17.2.3",
+    "express": "^4.18.2",
+    "pg": "^8.11.3"
   }
 }
